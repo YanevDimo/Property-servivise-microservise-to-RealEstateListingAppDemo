@@ -10,6 +10,7 @@ import propertyservice.app.client.AgentServiceClient;
 import propertyservice.app.client.CityServiceClient;
 import propertyservice.app.client.PropertyTypeServiceClient;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,6 +20,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class PropertyService {
@@ -30,58 +32,26 @@ public class PropertyService {
 
     @Transactional(readOnly = true)
     public List<PropertyDto> getAllProperties() {
-        List<Property> properties = propertyRepository.findAll();
-        
-        // Force initialization of lazy-loaded collections for all properties
-        for (Property property : properties) {
-            if (property.getImages() != null) {
-                property.getImages().size(); // Force initialization
-            }
-            if (property.getFeatures() != null) {
-                property.getFeatures().size(); // Force initialization
-            }
-        }
-        
-        return properties.stream()
-                .map(this::convertToDto)
-                .collect(Collectors.toList());
+        log.debug("Fetching all properties");
+        return convertToDtoList(propertyRepository.findAll());
     }
 
     @Transactional(readOnly = true)
     public PropertyDto getPropertyById(UUID id) {
+        log.debug("Fetching property with id: {}", id);
         Property property = propertyRepository.findById(id)
                 .orElseThrow(() -> new PropertyNotFoundException("Property not found with id: " + id));
-        
-        // Force initialization of lazy-loaded collections
-        if (property.getImages() != null) {
-            property.getImages().size(); // Force initialization
-        }
-        if (property.getFeatures() != null) {
-            property.getFeatures().size(); // Force initialization
-        }
-        
         return convertToDto(property);
     }
 
     @Transactional
     public PropertyDto createProperty(PropertyCreateDto dto) {
-        // Validate agent exists
-        Boolean agentExists = agentServiceClient.agentExists(dto.getAgentId());
-        if (Boolean.FALSE.equals(agentExists)) {
-            throw new RuntimeException("Agent not found with id: " + dto.getAgentId());
-        }
-
-        // Validate city exists
-        Boolean cityExists = cityServiceClient.cityExists(dto.getCityId());
-        if (Boolean.FALSE.equals(cityExists)) {
-            throw new RuntimeException("City not found with id: " + dto.getCityId());
-        }
-
-        // Validate property type exists
-        Boolean propertyTypeExists = propertyTypeServiceClient.propertyTypeExists(dto.getPropertyTypeId());
-        if (Boolean.FALSE.equals(propertyTypeExists)) {
-            throw new RuntimeException("Property type not found with id: " + dto.getPropertyTypeId());
-        }
+        log.info("Creating new property with title: {}", dto.getTitle());
+        
+        // Validate foreign keys
+        validateAgent(dto.getAgentId());
+        validateCity(dto.getCityId());
+        validatePropertyType(dto.getPropertyTypeId());
 
         // Create property
         Property property = Property.builder()
@@ -99,31 +69,14 @@ public class PropertyService {
                 .isFeatured(false)
                 .build();
 
-        // Ensure lists are initialized (important for @Builder)
-        if (property.getImages() == null) {
-            property.setImages(new ArrayList<>());
-        }
-        if (property.getFeatures() == null) {
-            property.setFeatures(new ArrayList<>());
-        }
+        // Lists are initialized via @Builder.Default in Property entity
 
         // Add features
-        if (dto.getFeatures() != null && !dto.getFeatures().isEmpty()) {
-            for (String featureName : dto.getFeatures()) {
-                PropertyFeature feature = PropertyFeature.builder()
-                        .property(property)
-                        .featureName(featureName)
-                        .build();
-                property.getFeatures().add(feature);
-            }
-        }
+        addFeaturesToProperty(property, dto.getFeatures());
 
         // Add images
         if (dto.getImageUrls() != null && !dto.getImageUrls().isEmpty()) {
-            System.out.println("=== IMAGE CREATION DEBUG ===");
-            System.out.println("Creating property with " + dto.getImageUrls().size() + " images: " + dto.getImageUrls());
-            System.out.println("Property images list before: " + (property.getImages() == null ? "NULL" : property.getImages().size()));
-            
+            log.debug("Adding {} images to property", dto.getImageUrls().size());
             for (int i = 0; i < dto.getImageUrls().size(); i++) {
                 String imageUrl = dto.getImageUrls().get(i);
                 if (imageUrl != null && !imageUrl.trim().isEmpty()) {
@@ -134,70 +87,34 @@ public class PropertyService {
                             .displayOrder(i)
                             .build();
                     property.getImages().add(image);
-                    System.out.println("✓ Added image " + (i + 1) + " to property: " + imageUrl);
-                } else {
-                    System.out.println("✗ Skipping empty image URL at index " + i);
                 }
             }
-            System.out.println("Property images list after: " + property.getImages().size());
-            System.out.println("=== END IMAGE DEBUG ===");
-        } else {
-            System.out.println("⚠️ No image URLs provided in PropertyCreateDto");
-            System.out.println("dto.getImageUrls() = " + dto.getImageUrls());
         }
 
-        // Save property (cascade should save images)
-        System.out.println("Saving property with " + property.getImages().size() + " images...");
-        System.out.println("Images list before save: " + property.getImages());
-        Property savedProperty = propertyRepository.saveAndFlush(property); // Use saveAndFlush to ensure immediate persistence
-        System.out.println("Property saved with ID: " + savedProperty.getId());
+        // Save property 
+        Property savedProperty = propertyRepository.save(property);
+        log.info("Property created successfully with id: {}", savedProperty.getId());
         
-        // Verify images were saved
-        if (savedProperty.getImages() != null) {
-            System.out.println("Saved property has " + savedProperty.getImages().size() + " images in memory");
-            savedProperty.getImages().forEach(img -> 
-                System.out.println("  - Image: " + img.getImageUrl() + " (ID: " + img.getId() + ")")
-            );
-        } else {
-            System.out.println("⚠️ Saved property has NULL images collection!");
-        }
-        
-        // Force initialization of images collection to ensure they're loaded
-        // This is needed because @OneToMany uses LAZY fetching by default
-        if (savedProperty.getImages() != null) {
-            savedProperty.getImages().size(); // Force initialization
-        }
-        
-        return convertToDto(savedProperty);
+        return convertToDto(reloadPropertyWithRelations(savedProperty.getId()));
     }
 
     @Transactional
     public PropertyDto updateProperty(UUID id, PropertyUpdateDto dto) {
+        log.info("Updating property with id: {}", id);
         Property property = propertyRepository.findById(id)
                 .orElseThrow(() -> new PropertyNotFoundException("Property not found with id: " + id));
 
-        // Validate foreign keys if provided
+        // Validate and update foreign keys if provided
         if (dto.getAgentId() != null) {
-            Boolean agentExists = agentServiceClient.agentExists(dto.getAgentId());
-            if (Boolean.FALSE.equals(agentExists)) {
-                throw new RuntimeException("Agent not found with id: " + dto.getAgentId());
-            }
+            validateAgent(dto.getAgentId());
             property.setAgentId(dto.getAgentId());
         }
-
         if (dto.getCityId() != null) {
-            Boolean cityExists = cityServiceClient.cityExists(dto.getCityId());
-            if (Boolean.FALSE.equals(cityExists)) {
-                throw new RuntimeException("City not found with id: " + dto.getCityId());
-            }
+            validateCity(dto.getCityId());
             property.setCityId(dto.getCityId());
         }
-
         if (dto.getPropertyTypeId() != null) {
-            Boolean propertyTypeExists = propertyTypeServiceClient.propertyTypeExists(dto.getPropertyTypeId());
-            if (Boolean.FALSE.equals(propertyTypeExists)) {
-                throw new RuntimeException("Property type not found with id: " + dto.getPropertyTypeId());
-            }
+            validatePropertyType(dto.getPropertyTypeId());
             property.setPropertyTypeId(dto.getPropertyTypeId());
         }
 
@@ -214,138 +131,75 @@ public class PropertyService {
         // Update features
         if (dto.getFeatures() != null) {
             property.getFeatures().clear();
-            for (String featureName : dto.getFeatures()) {
-                PropertyFeature feature = PropertyFeature.builder()
-                        .property(property)
-                        .featureName(featureName)
-                        .build();
-                property.getFeatures().add(feature);
-            }
+            addFeaturesToProperty(property, dto.getFeatures());
         }
 
         Property updatedProperty = propertyRepository.save(property);
-        
-        // Force initialization of lazy-loaded collections
-        if (updatedProperty.getImages() != null) {
-            updatedProperty.getImages().size(); // Force initialization
-        }
-        if (updatedProperty.getFeatures() != null) {
-            updatedProperty.getFeatures().size(); // Force initialization
-        }
-        
-        return convertToDto(updatedProperty);
+        return convertToDto(reloadPropertyWithRelations(updatedProperty.getId()));
     }
 
     @Transactional
     public void deleteProperty(UUID id) {
+        log.info("Deleting property with id: {}", id);
         Property property = propertyRepository.findById(id)
                 .orElseThrow(() -> new PropertyNotFoundException("Property not found with id: " + id));
         propertyRepository.delete(property);
+        log.info("Property deleted successfully with id: {}", id);
     }
 
     @Transactional(readOnly = true)
     public List<PropertyDto> getFeaturedProperties() {
-        List<Property> properties = propertyRepository.findByIsFeaturedTrue();
-        
-        // Force initialization of lazy-loaded collections
-        for (Property property : properties) {
-            if (property.getImages() != null) {
-                property.getImages().size(); // Force initialization
-            }
-            if (property.getFeatures() != null) {
-                property.getFeatures().size(); // Force initialization
-            }
-        }
-        
-        return properties.stream()
-                .map(this::convertToDto)
-                .collect(Collectors.toList());
+        log.debug("Fetching featured properties");
+        return convertToDtoList(propertyRepository.findByIsFeaturedTrue());
     }
 
     @Transactional
     public void toggleFeatured(UUID id) {
+        log.info("Toggling featured status for property with id: {}", id);
         Property property = propertyRepository.findById(id)
                 .orElseThrow(() -> new PropertyNotFoundException("Property not found with id: " + id));
         property.setIsFeatured(!property.getIsFeatured());
         propertyRepository.save(property);
+        log.info("Property featured status updated to: {}", property.getIsFeatured());
     }
 
     @Transactional(readOnly = true)
     public List<PropertyDto> searchProperties(String search, UUID cityId, UUID propertyTypeId, BigDecimal maxPrice) {
-        List<Property> properties = propertyRepository.searchProperties(search, cityId, propertyTypeId, maxPrice);
-        
-        // Force initialization of lazy-loaded collections
-        for (Property property : properties) {
-            if (property.getImages() != null) {
-                property.getImages().size(); // Force initialization
-            }
-            if (property.getFeatures() != null) {
-                property.getFeatures().size(); // Force initialization
-            }
-        }
-        
-        return properties.stream()
-                .map(this::convertToDto)
-                .collect(Collectors.toList());
+        log.debug("Searching properties with search: {}, cityId: {}, propertyTypeId: {}, maxPrice: {}", 
+                search, cityId, propertyTypeId, maxPrice);
+        return convertToDtoList(propertyRepository.searchProperties(search, cityId, propertyTypeId, maxPrice));
     }
 
     @Transactional(readOnly = true)
     public List<PropertyDto> getPropertiesByAgent(UUID agentId) {
-        List<Property> properties = propertyRepository.findByAgentId(agentId);
-        
-        // Force initialization of lazy-loaded collections
-        for (Property property : properties) {
-            if (property.getImages() != null) {
-                property.getImages().size(); // Force initialization
-            }
-            if (property.getFeatures() != null) {
-                property.getFeatures().size(); // Force initialization
-            }
-        }
-        
-        return properties.stream()
-                .map(this::convertToDto)
-                .collect(Collectors.toList());
+        log.debug("Fetching properties for agent with id: {}", agentId);
+        return convertToDtoList(propertyRepository.findByAgentId(agentId));
     }
 
     @Transactional(readOnly = true)
     public List<PropertyDto> getPropertiesByCity(UUID cityId) {
-        List<Property> properties = propertyRepository.findByCityId(cityId);
-        
-        // Force initialization of lazy-loaded collections
-        for (Property property : properties) {
-            if (property.getImages() != null) {
-                property.getImages().size(); // Force initialization
-            }
-            if (property.getFeatures() != null) {
-                property.getFeatures().size(); // Force initialization
-            }
-        }
-        
-        return properties.stream()
-                .map(this::convertToDto)
-                .collect(Collectors.toList());
+        log.debug("Fetching properties for city with id: {}", cityId);
+        return convertToDtoList(propertyRepository.findByCityId(cityId));
     }
 
     private PropertyDto convertToDto(Property property) {
-        // Ensure images collection is initialized (handle lazy loading)
+        // Extract image URLs - collections are already loaded via fetch joins
         List<String> imageUrls = new ArrayList<>();
         if (property.getImages() != null) {
-            try {
-                imageUrls = property.getImages().stream()
-                        .map(PropertyImage::getImageUrl)
-                        .filter(url -> url != null && !url.trim().isEmpty())
-                        .collect(Collectors.toList());
-            } catch (Exception e) {
-                // If lazy loading fails, log and return empty list
-                System.err.println("Error loading images for property " + property.getId() + ": " + e.getMessage());
-                imageUrls = new ArrayList<>();
-            }
+            imageUrls = property.getImages().stream()
+                    .map(PropertyImage::getImageUrl)
+                    .filter(url -> url != null && !url.trim().isEmpty())
+                    .collect(Collectors.toList());
         }
 
-        List<String> features = property.getFeatures().stream()
-                .map(PropertyFeature::getFeatureName)
-                .collect(Collectors.toList());
+        // Extract features - collections are already loaded via fetch joins
+        List<String> features = new ArrayList<>();
+        if (property.getFeatures() != null) {
+            features = property.getFeatures().stream()
+                    .map(PropertyFeature::getFeatureName)
+                    .filter(name -> name != null && !name.trim().isEmpty())
+                    .collect(Collectors.toList());
+        }
 
         return PropertyDto.builder()
                 .id(property.getId())
@@ -366,6 +220,56 @@ public class PropertyService {
                 .imageUrls(imageUrls)
                 .features(features)
                 .build();
+    }
+
+    // Helper methods to reduce code duplication
+    
+    private List<PropertyDto> convertToDtoList(List<Property> properties) {
+        return properties.stream()
+                .map(this::convertToDto)
+                .collect(Collectors.toList());
+    }
+    
+    private Property reloadPropertyWithRelations(UUID id) {
+        return propertyRepository.findById(id)
+                .orElseThrow(() -> new PropertyNotFoundException("Property not found with id: " + id));
+    }
+    
+    private void validateAgent(UUID agentId) {
+        Boolean agentExists = agentServiceClient.agentExists(agentId);
+        if (Boolean.FALSE.equals(agentExists)) {
+            log.warn("Agent not found with id: {}", agentId);
+            throw new RuntimeException("Agent not found with id: " + agentId);
+        }
+    }
+    
+    private void validateCity(UUID cityId) {
+        Boolean cityExists = cityServiceClient.cityExists(cityId);
+        if (Boolean.FALSE.equals(cityExists)) {
+            log.warn("City not found with id: {}", cityId);
+            throw new RuntimeException("City not found with id: " + cityId);
+        }
+    }
+    
+    private void validatePropertyType(UUID propertyTypeId) {
+        Boolean propertyTypeExists = propertyTypeServiceClient.propertyTypeExists(propertyTypeId);
+        if (Boolean.FALSE.equals(propertyTypeExists)) {
+            log.warn("Property type not found with id: {}", propertyTypeId);
+            throw new RuntimeException("Property type not found with id: " + propertyTypeId);
+        }
+    }
+    
+    private void addFeaturesToProperty(Property property, List<String> features) {
+        if (features != null && !features.isEmpty()) {
+            log.debug("Adding {} features to property", features.size());
+            for (String featureName : features) {
+                PropertyFeature feature = PropertyFeature.builder()
+                        .property(property)
+                        .featureName(featureName)
+                        .build();
+                property.getFeatures().add(feature);
+            }
+        }
     }
 }
 
