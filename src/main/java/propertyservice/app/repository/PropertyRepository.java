@@ -15,26 +15,26 @@ import java.util.UUID;
 @Repository
 public interface PropertyRepository extends JpaRepository<Property, UUID> {
     
-    // Override findAll with fetch join
-    @EntityGraph(attributePaths = {"images", "features"})
+    // Use batch fetching instead of EntityGraph to avoid MultipleBagFetchException
+    // BatchSize on entity will handle fetching collections efficiently
     @Override
     List<Property> findAll();
     
-    // Override findById with fetch join
-    @EntityGraph(attributePaths = {"images", "features"})
+    // Use batch fetching - fetch one collection with EntityGraph, batch fetch the other
+    @EntityGraph(attributePaths = {"images"})
     @Override
     Optional<Property> findById(UUID id);
     
-    @EntityGraph(attributePaths = {"images", "features"})
+    @EntityGraph(attributePaths = {"images"})
     List<Property> findByAgentId(UUID agentId);
     
-    @EntityGraph(attributePaths = {"images", "features"})
+    @EntityGraph(attributePaths = {"images"})
     List<Property> findByCityId(UUID cityId);
     
-    @EntityGraph(attributePaths = {"images", "features"})
+    @EntityGraph(attributePaths = {"images"})
     List<Property> findByIsFeaturedTrue();
     
-    @EntityGraph(attributePaths = {"images", "features"})
+    @EntityGraph(attributePaths = {"images"})
     @Query("SELECT p FROM Property p WHERE " +
            "(:search IS NULL OR p.title LIKE CONCAT('%', :search, '%') OR p.description LIKE CONCAT('%', :search, '%')) AND " +
            "(:cityId IS NULL OR p.cityId = :cityId) AND " +

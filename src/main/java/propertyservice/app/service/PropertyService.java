@@ -11,6 +11,7 @@ import propertyservice.app.client.CityServiceClient;
 import propertyservice.app.client.PropertyTypeServiceClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -18,6 +19,7 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -32,8 +34,12 @@ public class PropertyService {
 
     @Transactional(readOnly = true)
     public List<PropertyDto> getAllProperties() {
-        log.debug("Fetching all properties");
-        return convertToDtoList(propertyRepository.findAll());
+        log.info("Fetching all properties from database");
+        List<Property> properties = propertyRepository.findAll();
+        log.info("Found {} properties in database", properties.size());
+        List<PropertyDto> result = convertToDtoList(properties);
+        log.info("Converted to {} DTOs", result.size());
+        return result;
     }
 
     @Transactional(readOnly = true)
@@ -45,6 +51,7 @@ public class PropertyService {
     }
 
     @Transactional
+    @CacheEvict(value = "allProperties", allEntries = true)
     public PropertyDto createProperty(PropertyCreateDto dto) {
         log.info("Creating new property with title: {}", dto.getTitle());
         
@@ -75,21 +82,7 @@ public class PropertyService {
         addFeaturesToProperty(property, dto.getFeatures());
 
         // Add images
-        if (dto.getImageUrls() != null && !dto.getImageUrls().isEmpty()) {
-            log.debug("Adding {} images to property", dto.getImageUrls().size());
-            for (int i = 0; i < dto.getImageUrls().size(); i++) {
-                String imageUrl = dto.getImageUrls().get(i);
-                if (imageUrl != null && !imageUrl.trim().isEmpty()) {
-                    PropertyImage image = PropertyImage.builder()
-                            .property(property)
-                            .imageUrl(imageUrl.trim())
-                            .isPrimary(i == 0) // First image is primary
-                            .displayOrder(i)
-                            .build();
-                    property.getImages().add(image);
-                }
-            }
-        }
+        addImagesToProperty(property, dto.getImageUrls());
 
         // Save property 
         Property savedProperty = propertyRepository.save(property);
@@ -99,6 +92,7 @@ public class PropertyService {
     }
 
     @Transactional
+    @CacheEvict(value = "allProperties", allEntries = true)
     public PropertyDto updateProperty(UUID id, PropertyUpdateDto dto) {
         log.info("Updating property with id: {}", id);
         Property property = propertyRepository.findById(id)
@@ -139,11 +133,13 @@ public class PropertyService {
     }
 
     @Transactional
+    @CacheEvict(value = "allProperties", allEntries = true)
     public void deleteProperty(UUID id) {
         log.info("Deleting property with id: {}", id);
         Property property = propertyRepository.findById(id)
                 .orElseThrow(() -> new PropertyNotFoundException("Property not found with id: " + id));
         propertyRepository.delete(property);
+        // Transaction will commit the delete automatically
         log.info("Property deleted successfully with id: {}", id);
     }
 
@@ -154,6 +150,7 @@ public class PropertyService {
     }
 
     @Transactional
+    @CacheEvict(value = "allProperties", allEntries = true)
     public void toggleFeatured(UUID id) {
         log.info("Toggling featured status for property with id: {}", id);
         Property property = propertyRepository.findById(id)
@@ -183,23 +180,9 @@ public class PropertyService {
     }
 
     private PropertyDto convertToDto(Property property) {
-        // Extract image URLs - collections are already loaded via fetch joins
-        List<String> imageUrls = new ArrayList<>();
-        if (property.getImages() != null) {
-            imageUrls = property.getImages().stream()
-                    .map(PropertyImage::getImageUrl)
-                    .filter(url -> url != null && !url.trim().isEmpty())
-                    .collect(Collectors.toList());
-        }
-
-        // Extract features - collections are already loaded via fetch joins
-        List<String> features = new ArrayList<>();
-        if (property.getFeatures() != null) {
-            features = property.getFeatures().stream()
-                    .map(PropertyFeature::getFeatureName)
-                    .filter(name -> name != null && !name.trim().isEmpty())
-                    .collect(Collectors.toList());
-        }
+        // Extract image URLs and features - collections are already loaded via fetch joins
+        List<String> imageUrls = extractImageUrls(property.getImages());
+        List<String> features = extractFeatureNames(property.getFeatures());
 
         return PropertyDto.builder()
                 .id(property.getId())
@@ -222,6 +205,26 @@ public class PropertyService {
                 .build();
     }
 
+    private List<String> extractImageUrls(List<PropertyImage> images) {
+        if (images == null || images.isEmpty()) {
+            return new ArrayList<>();
+        }
+        return images.stream()
+                .map(PropertyImage::getImageUrl)
+                .filter(url -> url != null && !url.trim().isEmpty())
+                .collect(Collectors.toList());
+    }
+
+    private List<String> extractFeatureNames(List<PropertyFeature> features) {
+        if (features == null || features.isEmpty()) {
+            return new ArrayList<>();
+        }
+        return features.stream()
+                .map(PropertyFeature::getFeatureName)
+                .filter(name -> name != null && !name.trim().isEmpty())
+                .collect(Collectors.toList());
+    }
+
     // Helper methods to reduce code duplication
     
     private List<PropertyDto> convertToDtoList(List<Property> properties) {
@@ -236,26 +239,22 @@ public class PropertyService {
     }
     
     private void validateAgent(UUID agentId) {
-        Boolean agentExists = agentServiceClient.agentExists(agentId);
-        if (Boolean.FALSE.equals(agentExists)) {
-            log.warn("Agent not found with id: {}", agentId);
-            throw new RuntimeException("Agent not found with id: " + agentId);
-        }
+        validateEntityExists(agentId, agentServiceClient::agentExists, "Agent");
     }
     
     private void validateCity(UUID cityId) {
-        Boolean cityExists = cityServiceClient.cityExists(cityId);
-        if (Boolean.FALSE.equals(cityExists)) {
-            log.warn("City not found with id: {}", cityId);
-            throw new RuntimeException("City not found with id: " + cityId);
-        }
+        validateEntityExists(cityId, cityServiceClient::cityExists, "City");
     }
     
     private void validatePropertyType(UUID propertyTypeId) {
-        Boolean propertyTypeExists = propertyTypeServiceClient.propertyTypeExists(propertyTypeId);
-        if (Boolean.FALSE.equals(propertyTypeExists)) {
-            log.warn("Property type not found with id: {}", propertyTypeId);
-            throw new RuntimeException("Property type not found with id: " + propertyTypeId);
+        validateEntityExists(propertyTypeId, propertyTypeServiceClient::propertyTypeExists, "Property type");
+    }
+    
+    private void validateEntityExists(UUID id, Function<UUID, Boolean> existenceChecker, String entityName) {
+        Boolean exists = existenceChecker.apply(id);
+        if (Boolean.FALSE.equals(exists)) {
+            log.warn("{} not found with id: {}", entityName, id);
+            throw new RuntimeException(entityName + " not found with id: " + id);
         }
     }
     
@@ -271,5 +270,22 @@ public class PropertyService {
             }
         }
     }
+    
+    private void addImagesToProperty(Property property, List<String> imageUrls) {
+        if (imageUrls != null && !imageUrls.isEmpty()) {
+            log.debug("Adding {} images to property", imageUrls.size());
+            for (int i = 0; i < imageUrls.size(); i++) {
+                String imageUrl = imageUrls.get(i);
+                if (imageUrl != null && !imageUrl.trim().isEmpty()) {
+                    PropertyImage image = PropertyImage.builder()
+                            .property(property)
+                            .imageUrl(imageUrl.trim())
+                            .isPrimary(i == 0) // First image is primary
+                            .displayOrder(i)
+                            .build();
+                    property.getImages().add(image);
+                }
+            }
+        }
+    }
 }
-

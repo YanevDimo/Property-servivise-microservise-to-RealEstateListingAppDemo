@@ -15,10 +15,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(PropertyNotFoundException.class)
     public ResponseEntity<Map<String, String>> handlePropertyNotFoundException(PropertyNotFoundException ex) {
-        Map<String, String> error = new HashMap<>();
-        error.put("message", ex.getMessage());
-        error.put("status", String.valueOf(HttpStatus.NOT_FOUND.value()));
-        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+        return buildErrorResponse(ex.getMessage(), HttpStatus.NOT_FOUND);
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -35,12 +32,13 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, String>> handleGenericException(Exception ex) {
+        return buildErrorResponse(ex.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+    
+    private ResponseEntity<Map<String, String>> buildErrorResponse(String message, HttpStatus status) {
         Map<String, String> error = new HashMap<>();
-        error.put("message", ex.getMessage());
-        error.put("status", String.valueOf(HttpStatus.INTERNAL_SERVER_ERROR.value()));
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        error.put("message", message);
+        error.put("status", String.valueOf(status.value()));
+        return ResponseEntity.status(status).body(error);
     }
 }
-
-
-
