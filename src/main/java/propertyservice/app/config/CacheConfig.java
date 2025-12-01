@@ -10,8 +10,6 @@ public class CacheConfig {
 
     @Bean
     public CacheManager cacheManager() {
-        // Allow dynamic cache creation - caches will be created on-demand
-        // This prevents the "Cannot find cache" error
         ConcurrentMapCacheManager cacheManager = new ConcurrentMapCacheManager();
         cacheManager.setAllowNullValues(false);
         return cacheManager;
