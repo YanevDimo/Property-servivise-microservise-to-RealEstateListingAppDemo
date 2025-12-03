@@ -419,5 +419,343 @@ class PropertyServiceTest {
         assertNotNull(result.getFeatures());
         assertEquals(2, result.getFeatures().size());
     }
+
+    @Test
+    void extractImageUrls_WithNullImages_ShouldReturnEmptyList() {
+        property.setImages(null);
+        when(propertyRepository.findById(propertyId)).thenReturn(Optional.of(property));
+
+        PropertyDto result = propertyService.getPropertyById(propertyId);
+
+        assertNotNull(result.getImageUrls());
+        assertTrue(result.getImageUrls().isEmpty());
+    }
+
+    @Test
+    void extractImageUrls_WithEmptyImages_ShouldReturnEmptyList() {
+        property.setImages(new ArrayList<>());
+        when(propertyRepository.findById(propertyId)).thenReturn(Optional.of(property));
+
+        PropertyDto result = propertyService.getPropertyById(propertyId);
+
+        assertNotNull(result.getImageUrls());
+        assertTrue(result.getImageUrls().isEmpty());
+    }
+
+    @Test
+    void extractImageUrls_WithNullAndEmptyUrls_ShouldFilterThem() {
+        PropertyImage image1 = PropertyImage.builder()
+                .property(property)
+                .imageUrl("http://example.com/image1.jpg")
+                .build();
+
+        PropertyImage image2 = PropertyImage.builder()
+                .property(property)
+                .imageUrl(null)
+                .build();
+
+        PropertyImage image3 = PropertyImage.builder()
+                .property(property)
+                .imageUrl("   ")
+                .build();
+
+        property.setImages(Arrays.asList(image1, image2, image3));
+        when(propertyRepository.findById(propertyId)).thenReturn(Optional.of(property));
+
+        PropertyDto result = propertyService.getPropertyById(propertyId);
+
+        assertEquals(1, result.getImageUrls().size());
+        assertEquals("http://example.com/image1.jpg", result.getImageUrls().get(0));
+    }
+
+    @Test
+    void extractFeatureNames_WithNullFeatures_ShouldReturnEmptyList() {
+        property.setFeatures(null);
+        when(propertyRepository.findById(propertyId)).thenReturn(Optional.of(property));
+
+        PropertyDto result = propertyService.getPropertyById(propertyId);
+
+        assertNotNull(result.getFeatures());
+        assertTrue(result.getFeatures().isEmpty());
+    }
+
+    @Test
+    void extractFeatureNames_WithEmptyFeatures_ShouldReturnEmptyList() {
+        property.setFeatures(new ArrayList<>());
+        when(propertyRepository.findById(propertyId)).thenReturn(Optional.of(property));
+
+        PropertyDto result = propertyService.getPropertyById(propertyId);
+
+        assertNotNull(result.getFeatures());
+        assertTrue(result.getFeatures().isEmpty());
+    }
+
+    @Test
+    void extractFeatureNames_WithNullAndEmptyNames_ShouldFilterThem() {
+        PropertyFeature feature1 = PropertyFeature.builder()
+                .property(property)
+                .featureName("Pool")
+                .build();
+
+        PropertyFeature feature2 = PropertyFeature.builder()
+                .property(property)
+                .featureName(null)
+                .build();
+
+        PropertyFeature feature3 = PropertyFeature.builder()
+                .property(property)
+                .featureName("   ")
+                .build();
+
+        property.setFeatures(Arrays.asList(feature1, feature2, feature3));
+        when(propertyRepository.findById(propertyId)).thenReturn(Optional.of(property));
+
+        PropertyDto result = propertyService.getPropertyById(propertyId);
+
+        assertEquals(1, result.getFeatures().size());
+        assertEquals("Pool", result.getFeatures().get(0));
+    }
+
+    @Test
+    void addImagesToProperty_WithEmptyAndNullUrls_ShouldFilterThem() {
+        when(agentServiceClient.agentExists(agentId)).thenReturn(true);
+        when(cityServiceClient.cityExists(cityId)).thenReturn(true);
+        when(propertyTypeServiceClient.propertyTypeExists(propertyTypeId)).thenReturn(true);
+
+        PropertyCreateDto dto = PropertyCreateDto.builder()
+                .title("Test Property")
+                .description("Description")
+                .price(new BigDecimal("100000"))
+                .agentId(agentId)
+                .cityId(cityId)
+                .propertyTypeId(propertyTypeId)
+                .status(PropertyStatus.FOR_SALE)
+                .imageUrls(Arrays.asList("http://example.com/img1.jpg", "", "   ", null, "http://example.com/img2.jpg"))
+                .build();
+
+        when(propertyRepository.save(any(Property.class))).thenAnswer(invocation -> {
+            Property prop = invocation.getArgument(0);
+            prop.setId(propertyId);
+            return prop;
+        });
+        when(propertyRepository.findById(propertyId)).thenAnswer(invocation -> {
+            Property prop = Property.builder()
+                    .id(propertyId)
+                    .title("Test Property")
+                    .description("Description")
+                    .price(new BigDecimal("100000"))
+                    .agentId(agentId)
+                    .cityId(cityId)
+                    .propertyTypeId(propertyTypeId)
+                    .status(PropertyStatus.FOR_SALE)
+                    .images(new ArrayList<>())
+                    .features(new ArrayList<>())
+                    .build();
+            PropertyImage img1 = PropertyImage.builder()
+                    .property(prop)
+                    .imageUrl("http://example.com/img1.jpg")
+                    .isPrimary(true)
+                    .displayOrder(0)
+                    .build();
+            PropertyImage img2 = PropertyImage.builder()
+                    .property(prop)
+                    .imageUrl("http://example.com/img2.jpg")
+                    .isPrimary(false)
+                    .displayOrder(4)
+                    .build();
+            prop.getImages().add(img1);
+            prop.getImages().add(img2);
+            return Optional.of(prop);
+        });
+
+        PropertyDto result = propertyService.createProperty(dto);
+
+        assertNotNull(result);
+        assertEquals(2, result.getImageUrls().size());
+        assertTrue(result.getImageUrls().contains("http://example.com/img1.jpg"));
+        assertTrue(result.getImageUrls().contains("http://example.com/img2.jpg"));
+    }
+
+    @Test
+    void addImagesToProperty_WithMultipleImages_ShouldSetFirstAsPrimary() {
+        when(agentServiceClient.agentExists(agentId)).thenReturn(true);
+        when(cityServiceClient.cityExists(cityId)).thenReturn(true);
+        when(propertyTypeServiceClient.propertyTypeExists(propertyTypeId)).thenReturn(true);
+
+        PropertyCreateDto dto = PropertyCreateDto.builder()
+                .title("Test Property")
+                .description("Description")
+                .price(new BigDecimal("100000"))
+                .agentId(agentId)
+                .cityId(cityId)
+                .propertyTypeId(propertyTypeId)
+                .status(PropertyStatus.FOR_SALE)
+                .imageUrls(Arrays.asList("http://example.com/img1.jpg", "http://example.com/img2.jpg", "http://example.com/img3.jpg"))
+                .build();
+
+        Property savedProperty = Property.builder()
+                .id(propertyId)
+                .title(dto.getTitle())
+                .description(dto.getDescription())
+                .price(dto.getPrice())
+                .agentId(dto.getAgentId())
+                .cityId(dto.getCityId())
+                .propertyTypeId(dto.getPropertyTypeId())
+                .status(dto.getStatus())
+                .images(new ArrayList<>())
+                .features(new ArrayList<>())
+                .build();
+
+        when(propertyRepository.save(any(Property.class))).thenAnswer(invocation -> {
+            Property prop = invocation.getArgument(0);
+            prop.setId(propertyId);
+            return prop;
+        });
+        when(propertyRepository.findById(propertyId)).thenAnswer(invocation -> {
+            Property prop = Property.builder()
+                    .id(propertyId)
+                    .title(dto.getTitle())
+                    .images(new ArrayList<>())
+                    .features(new ArrayList<>())
+                    .build();
+            prop.getImages().addAll(savedProperty.getImages());
+            return Optional.of(prop);
+        });
+
+        propertyService.createProperty(dto);
+
+        verify(propertyRepository, times(1)).save(any(Property.class));
+    }
+
+    @Test
+    void validateEntityExists_WhenReturnsNull_ShouldNotThrowException() {
+        when(agentServiceClient.agentExists(agentId)).thenReturn(null);
+
+        assertThrows(RuntimeException.class, () -> propertyService.createProperty(createDto));
+    }
+
+    @Test
+    void validateEntityExists_WhenReturnsTrue_ShouldNotThrowException() {
+        when(agentServiceClient.agentExists(agentId)).thenReturn(true);
+        when(cityServiceClient.cityExists(cityId)).thenReturn(true);
+        when(propertyTypeServiceClient.propertyTypeExists(propertyTypeId)).thenReturn(true);
+        when(propertyRepository.save(any(Property.class))).thenReturn(property);
+        when(propertyRepository.findById(propertyId)).thenReturn(Optional.of(property));
+
+        assertDoesNotThrow(() -> propertyService.createProperty(createDto));
+    }
+
+    @Test
+    void updateProperty_WithAllFields_ShouldUpdateAllFields() {
+        PropertyUpdateDto updateDto = PropertyUpdateDto.builder()
+                .title("Updated Title")
+                .description("Updated Description")
+                .price(new BigDecimal("350000"))
+                .status(PropertyStatus.SOLD)
+                .bedrooms(5)
+                .bathrooms(4)
+                .squareFeet(3000)
+                .address("789 Updated St")
+                .build();
+
+        when(propertyRepository.findById(propertyId)).thenReturn(Optional.of(property));
+        when(propertyRepository.save(any(Property.class))).thenReturn(property);
+        when(propertyRepository.findById(propertyId)).thenReturn(Optional.of(property));
+
+        PropertyDto result = propertyService.updateProperty(propertyId, updateDto);
+
+        assertNotNull(result);
+        verify(propertyRepository, times(1)).save(any(Property.class));
+    }
+
+    @Test
+    void updateProperty_WithCityId_ShouldValidateAndUpdate() {
+        UUID newCityId = UUID.randomUUID();
+        updateDto.setCityId(newCityId);
+        when(propertyRepository.findById(propertyId)).thenReturn(Optional.of(property));
+        when(cityServiceClient.cityExists(newCityId)).thenReturn(true);
+        when(propertyRepository.save(any(Property.class))).thenReturn(property);
+        when(propertyRepository.findById(propertyId)).thenReturn(Optional.of(property));
+
+        propertyService.updateProperty(propertyId, updateDto);
+
+        verify(cityServiceClient, times(1)).cityExists(newCityId);
+        verify(propertyRepository, times(1)).save(any(Property.class));
+    }
+
+    @Test
+    void updateProperty_WithPropertyTypeId_ShouldValidateAndUpdate() {
+        UUID newPropertyTypeId = UUID.randomUUID();
+        updateDto.setPropertyTypeId(newPropertyTypeId);
+        when(propertyRepository.findById(propertyId)).thenReturn(Optional.of(property));
+        when(propertyTypeServiceClient.propertyTypeExists(newPropertyTypeId)).thenReturn(true);
+        when(propertyRepository.save(any(Property.class))).thenReturn(property);
+        when(propertyRepository.findById(propertyId)).thenReturn(Optional.of(property));
+
+        propertyService.updateProperty(propertyId, updateDto);
+
+        verify(propertyTypeServiceClient, times(1)).propertyTypeExists(newPropertyTypeId);
+        verify(propertyRepository, times(1)).save(any(Property.class));
+    }
+
+    @Test
+    void createProperty_WithNullFeatures_ShouldNotFail() {
+        createDto.setFeatures(null);
+        when(agentServiceClient.agentExists(agentId)).thenReturn(true);
+        when(cityServiceClient.cityExists(cityId)).thenReturn(true);
+        when(propertyTypeServiceClient.propertyTypeExists(propertyTypeId)).thenReturn(true);
+        when(propertyRepository.save(any(Property.class))).thenReturn(property);
+        when(propertyRepository.findById(propertyId)).thenReturn(Optional.of(property));
+
+        PropertyDto result = propertyService.createProperty(createDto);
+
+        assertNotNull(result);
+        verify(propertyRepository, times(1)).save(any(Property.class));
+    }
+
+    @Test
+    void createProperty_WithNullImageUrls_ShouldNotFail() {
+        createDto.setImageUrls(null);
+        when(agentServiceClient.agentExists(agentId)).thenReturn(true);
+        when(cityServiceClient.cityExists(cityId)).thenReturn(true);
+        when(propertyTypeServiceClient.propertyTypeExists(propertyTypeId)).thenReturn(true);
+        when(propertyRepository.save(any(Property.class))).thenReturn(property);
+        when(propertyRepository.findById(propertyId)).thenReturn(Optional.of(property));
+
+        PropertyDto result = propertyService.createProperty(createDto);
+
+        assertNotNull(result);
+        verify(propertyRepository, times(1)).save(any(Property.class));
+    }
+
+    @Test
+    void createProperty_WithEmptyFeatures_ShouldNotFail() {
+        createDto.setFeatures(new ArrayList<>());
+        when(agentServiceClient.agentExists(agentId)).thenReturn(true);
+        when(cityServiceClient.cityExists(cityId)).thenReturn(true);
+        when(propertyTypeServiceClient.propertyTypeExists(propertyTypeId)).thenReturn(true);
+        when(propertyRepository.save(any(Property.class))).thenReturn(property);
+        when(propertyRepository.findById(propertyId)).thenReturn(Optional.of(property));
+
+        PropertyDto result = propertyService.createProperty(createDto);
+
+        assertNotNull(result);
+        verify(propertyRepository, times(1)).save(any(Property.class));
+    }
+
+    @Test
+    void createProperty_WithEmptyImageUrls_ShouldNotFail() {
+        createDto.setImageUrls(new ArrayList<>());
+        when(agentServiceClient.agentExists(agentId)).thenReturn(true);
+        when(cityServiceClient.cityExists(cityId)).thenReturn(true);
+        when(propertyTypeServiceClient.propertyTypeExists(propertyTypeId)).thenReturn(true);
+        when(propertyRepository.save(any(Property.class))).thenReturn(property);
+        when(propertyRepository.findById(propertyId)).thenReturn(Optional.of(property));
+
+        PropertyDto result = propertyService.createProperty(createDto);
+
+        assertNotNull(result);
+        verify(propertyRepository, times(1)).save(any(Property.class));
+    }
 }
 

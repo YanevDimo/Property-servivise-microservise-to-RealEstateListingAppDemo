@@ -1,0 +1,59 @@
+version: "3.8"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: property-service-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: properties_db
+      MYSQL_USER: propertyuser
+      MYSQL_PASSWORD: propertypass
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-u",
+          "root",
+          "-prootpassword",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - property-network
+
+  property-service:
+    build: .
+    container_name: property-service
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/properties_db?createDatabaseIfNotExist=true
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: rootpassword
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      SPRING_JPA_SHOW_SQL: "false"
+      SERVER_PORT: 8083
+      AGENT_SERVICE_URL: http://host.docker.internal:8080
+      CITY_SERVICE_URL: http://host.docker.internal:8080
+      PROPERTY_TYPE_SERVICE_URL: http://host.docker.internal:8080
+    ports:
+      - "8084:8083"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - property-network
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+
+networks:
+  property-network:
+    driver: bridge
