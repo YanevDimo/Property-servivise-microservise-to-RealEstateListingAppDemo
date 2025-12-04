@@ -39,13 +39,13 @@ public class Property {
     private BigDecimal price;
     
     @Column(name = "agent_id", nullable = false)
-    private UUID agentId;  // Changed from @ManyToOne Agent
+    private UUID agentId;
     
     @Column(name = "city_id", nullable = false)
-    private UUID cityId;  // Changed from @ManyToOne City
+    private UUID cityId;
     
     @Column(name = "property_type_id", nullable = false)
-    private UUID propertyTypeId;  // Changed from @ManyToOne PropertyType
+    private UUID propertyTypeId;
     
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
